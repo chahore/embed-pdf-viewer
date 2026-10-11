@@ -14,9 +14,10 @@ import type { PdfRuntimeModule, Ptr } from '@embedpdf/engine-runtime';
  *
  * While at least one holder is active the pagePtr is shared (refcounted),
  * so overlapping `acquire(pon)` calls for the same page reuse a single
- * load. Once the refcount reaches zero the page is closed; a later
- * `acquire` reloads it — there is no LRU retention across the zero-ref
- * boundary. A future slice could add that without changing callers.
+ * load. Once the refcount reaches zero the page stays loaded until another
+ * page is released (an LRU of one): a viewer renders the tiles of one page
+ * in a row, and each would otherwise parse the page again. `closeIdle()`
+ * closes it early, for writes that change a page under its pagePtr.
  */
 export class PagePtrPool {
   private readonly counts = new Map<PageObjectNumber, { ptr: Ptr; refs: number }>();
@@ -45,23 +46,30 @@ export class PagePtrPool {
   }
 
   /**
-   * True while at least one holder has the page open. Page-STRUCTURE
-   * mutations (delete) assert on this: thread confinement means no other
-   * job can be mid-flight, so a held pagePtr during a structural mutation
-   * is a leaked `acquire` (an internal bug) — the mutator fails loudly
-   * instead of mutating under a live handle.
+   * True while at least one holder has the page open; the page kept loaded
+   * between jobs is not held. Page-STRUCTURE mutations (delete) assert on
+   * this: thread confinement means no other job can be mid-flight, so a held
+   * pagePtr during a structural mutation is a leaked `acquire` (an internal
+   * bug) — the mutator fails loudly instead of mutating under a live handle.
    */
   isHeld(pageObjectNumber: PageObjectNumber): boolean {
-    return this.counts.has(pageObjectNumber);
+    return (this.counts.get(pageObjectNumber)?.refs ?? 0) > 0;
   }
 
   release(pageObjectNumber: PageObjectNumber): void {
     const entry = this.counts.get(pageObjectNumber);
     if (!entry) return;
     entry.refs--;
-    if (entry.refs <= 0) {
-      this.runtime.fn.FPDF_ClosePage(entry.ptr);
-      this.counts.delete(pageObjectNumber);
+    if (entry.refs > 0) return;
+    for (const [other, { ptr, refs }] of this.counts) {
+      if (other !== pageObjectNumber && refs <= 0) this.close(other, ptr);
+    }
+  }
+
+  /** Close the pages no holder has open. */
+  closeIdle(): void {
+    for (const [pageObjectNumber, { ptr, refs }] of this.counts) {
+      if (refs <= 0) this.close(pageObjectNumber, ptr);
     }
   }
 
@@ -71,5 +79,10 @@ export class PagePtrPool {
       fn.FPDF_ClosePage(ptr);
     }
     this.counts.clear();
+  }
+
+  private close(pageObjectNumber: PageObjectNumber, ptr: Ptr): void {
+    this.runtime.fn.FPDF_ClosePage(ptr);
+    this.counts.delete(pageObjectNumber);
   }
 }

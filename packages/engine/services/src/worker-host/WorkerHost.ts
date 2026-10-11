@@ -271,6 +271,7 @@ export class WorkerHost {
       // completes or aborts. Reads keep seeing the live document, which the
       // candidate never changed.
       this.assertNoPendingSigning(msg);
+      this.closeIdlePages(msg);
       switch (msg.kind) {
         case 'open.fatMem':
         case 'open.layerMemBase':
@@ -530,6 +531,24 @@ export class WorkerHost {
       this.post(wirePack({ kind: 'reject', jobId: msg.jobId, error }, EMPTY_TRANSFER));
     } finally {
       this.aborts.delete(msg.jobId);
+      this.closeIdlePages(msg);
+    }
+  }
+
+  /**
+   * A page kept loaded between jobs (see `PagePtrPool`) was parsed against the
+   * document and fonts as they were, so the idle ones close around a write to
+   * their document and around a font change.
+   */
+  private closeIdlePages(msg: WorkerRequest): void {
+    if (FONT_KINDS.has(msg.kind)) {
+      for (const session of this.sessions.values()) {
+        if (session.isOpen()) session.pagePool().closeIdle();
+      }
+    } else if (MUTATING_KINDS.has(msg.kind) && 'docId' in msg) {
+      const layerName = 'layerName' in msg ? msg.layerName : undefined;
+      const session = this.sessions.get(sessionKey(msg.docId, layerName));
+      if (session?.isOpen()) session.pagePool().closeIdle();
     }
   }
 
@@ -1947,6 +1966,14 @@ const MUTATING_KINDS: ReadonlySet<WorkerRequest['kind']> = new Set<WorkerRequest
   'measure.setScale',
   'pieceInfo.update',
   'pieceInfo.clear',
+]);
+
+/** Request kinds that change how fonts resolve, for every document. */
+const FONT_KINDS: ReadonlySet<WorkerRequest['kind']> = new Set<WorkerRequest['kind']>([
+  'fonts.register',
+  'fonts.addFallback',
+  'fonts.clearFallbacks',
+  'fonts.clear',
 ]);
 
 function sessionKey(docId: string, layerName?: string): string {
