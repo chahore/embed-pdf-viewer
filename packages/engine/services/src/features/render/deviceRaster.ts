@@ -5,8 +5,11 @@ import type {
   PdfRect,
   PdfRotation,
 } from '@embedpdf/engine-core/runtime';
-import { EngineError, EngineErrorCode } from '@embedpdf/engine-core/runtime';
+import { EngineError, EngineErrorCode, normalizePdfRect } from '@embedpdf/engine-core/runtime';
 import type { PdfRuntimeModule, Ptr } from '@embedpdf/engine-runtime';
+
+import { withScratch } from '../../runtime/memory/scratch';
+import { readRectF } from '../../runtime/memory/structs';
 
 /**
  * The ONE place a PDF user-space region becomes a device raster.
@@ -97,8 +100,11 @@ export function deviceSize(
 export interface RasterizeOptions {
   /** The region to render, in PDF user space — ALREADY normalized by the caller. */
   rect: PdfRect;
-  /** Page dimensions in PDF user space, used to mirror PDFium's display matrix. */
-  page: { width: number; height: number };
+  /**
+   * The page's display box in PDF user space ({@link readPageBox}), for
+   * mirroring PDFium's display matrix: display space starts at its corner.
+   */
+  page: PdfRect;
   rotation: PdfRotation;
   viewport: PageRenderViewport;
   background: PageRenderBackground;
@@ -133,7 +139,7 @@ export function rasterize(runtime: PdfRuntimeModule, opts: RasterizeOptions): Pa
   // zero in the matrix.
   if (rect.right <= rect.left || rect.top <= rect.bottom) return null;
 
-  const displayRect = pdfRectToDisplayRect(rect, page.height);
+  const displayRect = pdfRectToDisplayRect(rect, page);
   const { width, height } = deviceSize(displayRect, rotation, viewport);
   if (opts.maxOutputPixels !== undefined && width * height > opts.maxOutputPixels) {
     throw new EngineError(
@@ -191,12 +197,33 @@ export function rasterize(runtime: PdfRuntimeModule, opts: RasterizeOptions): Pa
   }
 }
 
-function pdfRectToDisplayRect(rect: PdfRect, pageHeight: number): PdfRect {
+/**
+ * The page's display box in PDF user space: the box PDFium's display matrix
+ * maps to the page's pixels (the crop box of a page loaded normalized). A rect
+ * in PDF user space, as annotation rects and render targets are, is placed
+ * relative to it.
+ */
+export function readPageBox(runtime: PdfRuntimeModule, pagePtr: Ptr): PdfRect {
+  const { fn, mem } = runtime;
+  const box = withScratch(mem, 16, (ptr) =>
+    fn.FPDF_GetPageBoundingBox(pagePtr, ptr) ? readRectF(mem, ptr) : null,
+  );
+  if (box) return normalizePdfRect(box);
   return {
-    left: rect.left,
-    right: rect.right,
-    bottom: pageHeight - rect.top,
-    top: pageHeight - rect.bottom,
+    left: 0,
+    bottom: 0,
+    right: fn.FPDF_GetPageWidthF(pagePtr),
+    top: fn.FPDF_GetPageHeightF(pagePtr),
+  };
+}
+
+/** A PDF user-space rect in display space: from the page box's top-left, y down. */
+function pdfRectToDisplayRect(rect: PdfRect, page: PdfRect): PdfRect {
+  return {
+    left: rect.left - page.left,
+    right: rect.right - page.left,
+    bottom: page.top - rect.top,
+    top: page.top - rect.bottom,
   };
 }
 

@@ -13,7 +13,7 @@ import type { PdfRuntimeModule, Ptr } from '@embedpdf/engine-runtime';
 
 import type { DocumentSession } from '../../document-session/DocumentSession';
 import { throwIfAborted } from '../../shared/abort';
-import { FPDF_REVERSE_BYTE_ORDER, rasterize } from '../render/deviceRaster';
+import { FPDF_REVERSE_BYTE_ORDER, rasterize, readPageBox } from '../render/deviceRaster';
 import { readAnnotRect, readIntent } from './internal/read/annotationReadPrimitives';
 import { readAnnotationIdentity } from './internal/read/readAnnotationIdentity';
 import {
@@ -98,10 +98,7 @@ export class AnnotationAppearanceReader {
     const appearances: AnnotationAppearanceRaster[] = [];
 
     try {
-      const page = {
-        width: fn.FPDF_GetPageWidthF(pagePtr),
-        height: fn.FPDF_GetPageHeightF(pagePtr),
-      };
+      const page = readPageBox(this.runtime, pagePtr);
       const count = fn.FPDFPage_GetAnnotCount(pagePtr);
       for (let i = 0; i < count; i++) {
         throwIfAborted(signal);
@@ -183,7 +180,7 @@ export class AnnotationAppearanceReader {
     annotPtr: Ptr,
     modeInt: number,
     rect: PdfRect,
-    page: { width: number; height: number },
+    page: PdfRect,
     rotation: PdfRotation,
     scale: number,
     stripRotation: boolean,
