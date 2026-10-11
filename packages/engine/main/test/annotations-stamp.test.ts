@@ -192,6 +192,42 @@ describe('stamp annotations: engine-local (inline transport, wasm runtime)', () 
     expect(updated.updated.rect.right).toBeCloseTo(90, 0);
   });
 
+  test('update: a new source replaces the image, rotated or not', async () => {
+    const page = handle.page(toPageRef(PAGE_OBJECT_NUMBER));
+    const rect = { left: 130, bottom: 100, right: 190, top: 160 };
+    const pixels = async () => {
+      const raster = await page.render.raw({
+        target: { kind: 'rect', rect },
+        viewport: { kind: 'scale', scale: 1 },
+      });
+      const d = new Uint8Array(raster.data);
+      let red = 0;
+      let blue = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] > 200 && d[i + 1] < 60 && d[i + 2] < 60) red++;
+        if (d[i + 2] > 200 && d[i] < 60 && d[i + 1] < 60) blue++;
+      }
+      return { red, blue };
+    };
+    for (const rotation of [{}, { rotation: 90, unrotatedRect: rect }]) {
+      const { created } = await page.annotations.create({
+        subtype: 'stamp',
+        rect,
+        source: makePng(4, 4, [255, 0, 0, 255]),
+        fit: 'fill',
+        ...rotation,
+      });
+      expect(await pixels()).toEqual({ red: 60 * 60, blue: 0 });
+      await page.annotations.update(created.ref, {
+        subtype: 'stamp',
+        source: makePng(4, 4, [0, 0, 255, 255]),
+        fit: 'fill',
+      });
+      expect(await pixels()).toEqual({ red: 0, blue: 60 * 60 });
+      await page.annotations.delete(created.ref);
+    }
+  });
+
   test('rotated stamp: appearance renders UNROTATED — rect is the logical box, content is flat', async () => {
     const page = handle.page(toPageRef(PAGE_OBJECT_NUMBER));
     const png = makePng(8, 4, [255, 0, 0, 255]);

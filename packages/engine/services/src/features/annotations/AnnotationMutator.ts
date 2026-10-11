@@ -301,6 +301,13 @@ export class AnnotationMutator {
       // two paths cannot drift in their identity bookkeeping.
       const stableId = this.captureOrStampStableId(annotPtr);
 
+      // The reads above leave the old /AP parsed on this handle, and PDFium
+      // edits appearance objects through that form: a writer that replaces
+      // the appearance (a stamp's new source) starts from a fresh handle.
+      fn.FPDFPage_CloseAnnot(annotPtr);
+      annotPtr = null;
+      annotPtr = resolveAnnotPtr(this.runtime, this.session, pagePtr, ref);
+
       // Apply caller-supplied subtype-specific writes.
       applyPatch(fn, mem, annotPtr, patch, writeCtx);
       // A derived plain label supersedes imported rich contents; retaining stale /RC

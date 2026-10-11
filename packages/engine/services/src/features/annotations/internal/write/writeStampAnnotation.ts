@@ -10,7 +10,12 @@ import {
   type StampWirePatch,
   type WireResource,
 } from '@embedpdf/engine-core/runtime';
-import type { PdfFunctions, PdfRuntimeMemory, Ptr } from '@embedpdf/engine-runtime';
+import {
+  NULL_PTR,
+  type PdfFunctions,
+  type PdfRuntimeMemory,
+  type Ptr,
+} from '@embedpdf/engine-runtime';
 
 import { F32_BYTES } from '../../../../runtime/memory/structs';
 import { readAnnotRect } from '../read/annotationReadPrimitives';
@@ -18,6 +23,9 @@ import type { AnnotationWriteContext } from './annotationWriteContext';
 import { setAnnotRect } from './annotationWritePrimitives';
 import { applyAnnotationBaseDraft, applyAnnotationBasePatch } from './writeAnnotationBase';
 import { writeBoxTransformMetadata } from './writeAnnotationTransformMetadata';
+
+/** `FPDF_ANNOT_APPEARANCEMODE_NORMAL`: clearing it clears every appearance mode. */
+const FPDF_ANNOT_APPEARANCEMODE_NORMAL = 0;
 
 /** `EPDF_STAMP_FIT` codes from `public/fpdf_annot.h` (CSS `object-fit` naming on the wire). */
 const STAMP_FIT_TO_CODE: Record<StampFit, number> = {
@@ -273,10 +281,8 @@ function setStampContent(
     throw new EngineError(EngineErrorCode.Unknown, 'stamp content preflight invariant broken');
   }
 
-  // Replace, not merge: drop any existing appearance objects (no-op on create).
-  for (let i = fn.FPDFAnnot_GetObjectCount(annotPtr) - 1; i >= 0; i--) {
-    fn.FPDFAnnot_RemoveObject(annotPtr, i);
-  }
+  // Replace, not merge: drop any existing appearance (no-op on create).
+  fn.FPDFAnnot_SetAP(annotPtr, FPDF_ANNOT_APPEARANCEMODE_NORMAL, NULL_PTR);
 
   if (meta.mimeType === 'application/pdf') {
     setAppearanceFromPdfBytes(fn, mem, annotPtr, resource.bytes);
